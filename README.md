@@ -1,6 +1,6 @@
 # GPU Task Runner Skill
 
-一个轻量 GPU 批量任务调度 skill，配合其他 skill（如 `research[E]-coding`）使用。对话中已有任务背景时，自动探测 GPU 状态，计算并发方案，在已有脚本上追加调度逻辑。
+一个轻量 GPU 批量任务调度 skill，自动探测 GPU 状态，计算并发方案。
 
 ## 使用方式
 
