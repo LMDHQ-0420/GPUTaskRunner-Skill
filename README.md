@@ -1,61 +1,108 @@
-# GPU Task Runner Skill
+<p align="center">
+  <img src="logo.png" alt="GPU Task Runner" width="180"/>
+</p>
 
-一个轻量 GPU 批量任务调度 skill，自动探测 GPU 状态，计算并发方案。
+<h1 align="center">GPU Task Runner</h1>
 
-## 使用方式
+<p align="center">
+  A Claude / Codex skill that turns your conversation context into a ready-to-run GPU batch dispatch script — no config files, no boilerplate.
+</p>
+
+---
+
+## What It Does
+
+When you've been working with an AI coding skill and have a list of experiments or inference jobs to run, `/GPU-task-runner` steps in as the final mile. It reads everything already established in the conversation — the command, the task list, the model size, the environment — probes your live GPU state, and produces a shell script that dispatches all tasks dynamically across your available GPUs.
+
+**You don't write a scheduler. You don't babysit GPU utilization. You just run the script.**
+
+---
+
+## Features
+
+### Dynamic dispatch, not static batching
+Tasks are assigned to GPUs only when a GPU slot opens up. Every time a task finishes, the dispatcher re-scans GPU state and fills idle capacity immediately. No fixed round-robin, no wasted idle time between rounds.
+
+### Two-pass scheduling with OOM protection
+- **Pass 1** — assigns tasks to GPUs sorted by utilization (lowest first). Skips any GPU where util% exceeds the threshold *or* where remaining VRAM would be insufficient.
+- **Pass 2** — if running tasks fall below `MIN_CONCURRENCY` after pass 1, the util constraint is relaxed and tasks are pushed onto the least-loaded GPUs that can still safely accommodate them. VRAM safety is always enforced — a task is never assigned if it would OOM.
+
+### Minimum concurrency guarantee
+The skill estimates a sensible `MIN_CONCURRENCY` from your GPU state and asks you to confirm before writing the script. The dispatcher tries to keep at least that many tasks running at all times, except when all remaining GPUs would OOM.
+
+### Single-GPU and multi-GPU task support
+- `dispatcher_single.sh` — each task runs on one GPU (`CUDA_VISIBLE_DEVICES=<idx>`)
+- `dispatcher_multi.sh` — each task spans *k* consecutive GPUs (`CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun ...`), selected to minimize cross-NUMA traffic
+
+### Per-task logs
+Every subprocess's stdout and stderr is redirected to `logs/YYYY-MM-DD_HH-MM-SS/<task_id>.log`. Logs from a single run are grouped under one timestamped directory so reruns never overwrite previous results.
+
+### Context-first, zero re-collection
+The skill reads your conversation history before asking a single question. Command template, task list, VRAM estimate, conda/venv environment — anything already discussed is reused directly. Only genuinely missing information is requested, in one message, never across multiple turns.
+
+### Priority rules
+**User's current instruction > conversation history > skill defaults.**
+Inline overrides like `use only GPU 2 and 3` or `cap VRAM at 10 GB` are applied before anything else.
+
+---
+
+## Usage
 
 ```
 /GPU-task-runner
-/GPU-task-runner [具体指令]
+/GPU-task-runner <inline instruction>
 ```
 
-具体指令示例：
-- `/GPU-task-runner 只用 GPU 0 和 1`
-- `/GPU-task-runner 每个任务限制 8GB 显存`
-- `/GPU-task-runner 生成脚本但不运行`
-
-**优先级**：用户当前指令 > 对话历史信息 > skill 默认行为
-
-## 功能
-
-- **探测 GPU 状态**：通过 `nvidia-smi` 获取每张卡的利用率和空闲显存，跳过负载过高的卡
-- **自动提取任务信息**：从对话历史复用已有的命令、脚本、环境，不重复询问
-- **计算并发方案**：根据每任务显存需求和空闲显存，计算每张卡的并发槽数
-- **追加调度块**：在已有 `.sh` 脚本末尾追加调度逻辑；无已有脚本时生成独立 `run_batch.sh`
-- **日志重定向**：每个子任务的输出写入 `logs/YYYY-MM-DD_HH-MM-SS/<任务标识>.log`
-- **多卡任务支持**：检测 `torchrun`/`deepspeed`/`accelerate` 命令，将连续空闲卡分组分配
-- **直接运行**：默认追加完成后立即执行脚本；对话中明确要求"仅生成"时只输出脚本
-
-## 输出示例
-
+Examples:
 ```
-━━━━━━━━━━ GPU 调度方案 ━━━━━━━━━━
-任务总数：24   并发槽：5   预计轮次：5
-
-GPU  空闲显存   并发槽
- 0   18.2 GB    2
- 1   22.1 GB    2
- 2   10.4 GB    1
- 3   [跳过]      ← 利用率 91%
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-已追加调度逻辑到 ./train.sh
-运行：bash train.sh
-日志目录：logs/2026-07-07_14-32-01/
+/GPU-task-runner
+/GPU-task-runner use only GPU 0 and 1
+/GPU-task-runner cap VRAM per task at 8 GB
+/GPU-task-runner generate script only, do not run
+/GPU-task-runner MIN_CONCURRENCY 3
 ```
 
-## 安装
+---
+
+## What the Skill Produces
+
+1. A filled-in `dispatcher_single.sh` or `dispatcher_multi.sh`, appended to your existing run script (or written as `run_batch.sh` if none exists)
+2. A GPU status summary with estimated concurrency
+3. Optionally, immediate execution with environment activation — no `conda run`, just `source activate` then `bash <script>`
+
+---
+
+## Installation
 
 ### Claude Code
 
 ```bash
-mkdir -p ~/.claude/skills/GPU-task-runner
-cp SKILL.md ~/.claude/skills/GPU-task-runner/SKILL.md
+cp -r GPUTaskRunner ~/.claude/skills/
 ```
 
 ### Codex (OpenAI)
 
 ```bash
-mkdir -p ~/.codex/skills/GPU-task-runner
-cp SKILL.md ~/.codex/skills/GPU-task-runner/SKILL.md
+cp -r GPUTaskRunner ~/.codex/skills/
+```
+
+---
+
+## Requirements
+
+- `nvidia-smi` (NVIDIA driver installed)
+- bash ≥ 4.3 (for `wait -n`; older versions fall back to `wait`)
+
+---
+
+## Repository Layout
+
+```
+GPUTaskRunner/
+  SKILL.md                ← skill definition (Claude side)
+  dispatcher_single.sh    ← single-GPU dispatch template
+  dispatcher_multi.sh     ← multi-GPU dispatch template
+README.md
+logo.png
+LICENSE
 ```
